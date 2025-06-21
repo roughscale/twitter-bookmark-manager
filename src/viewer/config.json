@@ -1,0 +1,17 @@
+{
+  "dataDirectory": "./data",
+  "server": {
+    "port": 3000,
+    "host": "localhost"
+  },
+  "filePattern": {
+    "include": ["bookmark", ".json"],
+    "exclude": ["temp", "backup"]
+  },
+  "ui": {
+    "title": "Twitter Bookmarks Viewer",
+    "itemsPerPage": 50,
+    "enableSearch": true,
+    "enableFileSelector": true
+  }
+}

@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twitter Bookmarks Viewer</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <style>
+        .bookmark-card {
+            transition: all 0.2s ease;
+        }
+        .bookmark-card:hover {
+            background-color: #f9fafb;
+        }
+        .media-container img {
+            max-height: 400px;
+            width: 100%;
+            object-fit: cover;
+        }
+        .video-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a1a1a1;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        // Icon components
+        const Icon = ({ name, className = "w-5 h-5", ...props }) => {
+            useEffect(() => {
+                lucide.createIcons();
+            });
+            return React.createElement('i', {
+                'data-lucide': name,
+                className,
+                ...props
+            });
+        };
+
+        const TwitterBookmarksViewer = () => {
+            const [bookmarks, setBookmarks] = useState([]);
+            const [users, setUsers] = useState({});
+            const [media, setMedia] = useState({});
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [filteredBookmarks, setFilteredBookmarks] = useState([]);
+            const [availableFiles, setAvailableFiles] = useState([]);
+            const [currentFile, setCurrentFile] = useState('');
+            const [stats, setStats] = useState({ total: 0, filtered: 0 });
+            const [config, setConfig] = useState({ ui: {} });
+
+            // Load configuration
+            const loadConfig = useCallback(async () => {
+                try {
+                    const response = await fetch('/api/config');
+                    if (response.ok) {
+                        const configData = await response.json();
+                        setConfig(configData);
+                        
+                        // Update page title if configured
+                        if (configData.ui.title) {
+                            document.title = configData.ui.title;
+                        }
+                    }
+                } catch (err) {
+                    console.error('Error loading config:', err);
+                }
+            }, []);
+
+            // Load available files
+            const loadAvailableFiles = useCallback(async () => {
+                try {
+                    const response = await fetch('/api/files');
+                    if (response.ok) {
+                        const files = await response.json();
+                        setAvailableFiles(files);
+                    }
+                } catch (err) {
+                    console.error('Error loading files:', err);
+                }
+            }, []);
+
+            // Load bookmarks data
+            const loadBookmarks = useCallback(async (filename = '') => {
+                setLoading(true);
+                setError(null);
+
+                try {
+                    const url = filename ? `/api/bookmarks/${encodeURIComponent(filename)}` : '/api/bookmarks';
+                    const response = await fetch(url);
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+                    
+                    setBookmarks(data.bookmarks || []);
+                    setCurrentFile(data.filename || filename);
+                    
+                    // Create lookup maps for users and media
+                    const usersMap = {};
+                    const mediaMap = {};
+                    
+                    if (data.includes?.users) {
+                        data.includes.users.forEach(user => {
+                            usersMap[user.id] = user;
+                        });
+                    }
+                    
+                    if (data.includes?.media) {
+                        data.includes.media.forEach(mediaItem => {
+                            mediaMap[mediaItem.media_key] = mediaItem;
+                        });
+                    }
+                    
+                    setUsers(usersMap);
+                    setMedia(mediaMap);
+                    setFilteredBookmarks(data.bookmarks || []);
+                    setStats({ total: data.bookmarks?.length || 0, filtered: data.bookmarks?.length || 0 });
+                    
+                } catch (err) {
+                    console.error('Error loading bookmarks:', err);
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            }, []);
+
+            // Filter bookmarks based on search term
+            useEffect(() => {
+                if (!config.ui.enableSearch) {
+                    setFilteredBookmarks(bookmarks);
+                    setStats(prev => ({ ...prev, filtered: bookmarks.length }));
+                    return;
+                }
+
+                if (!searchTerm.trim()) {
+                    setFilteredBookmarks(bookmarks);
+                    setStats(prev => ({ ...prev, filtered: bookmarks.length }));
+                } else {
+                    const filtered = bookmarks.filter(bookmark => {
+                        const user = users[bookmark.author_id];
+                        const searchLower = searchTerm.toLowerCase();
+                        
+                        return (
+                            bookmark.text?.toLowerCase().includes(searchLower) ||
+                            user?.name?.toLowerCase().includes(searchLower) ||
+                            user?.username?.toLowerCase().includes(searchLower)
+                        );
+                    });
+                    setFilteredBookmarks(filtered);
+                    setStats(prev => ({ ...prev, filtered: filtered.length }));
+                }
+            }, [searchTerm, bookmarks, users, config.ui.enableSearch]);
+
+            // Load data on component mount
+            useEffect(() => {
+                loadConfig();
+                loadAvailableFiles();
+                loadBookmarks();
+            }, [loadConfig, loadAvailableFiles, loadBookmarks]);
+
+            const formatDate = (dateString) => {
+                const date = new Date(dateString);
+                const now = new Date();
+                const diffMs = now - date;
+                const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+                if (diffMinutes < 60) return `${diffMinutes}m`;
+                if (diffHours < 24) return `${diffHours}h`;
+                if (diffDays < 7) return `${diffDays}d`;
+                
+                return date.toLocaleDateString('en-US', { 
+                    month: 'short', 
+                    day: 'numeric',
+                    year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
+                });
+            };
+
+            const formatNumber = (num) => {
+                if (!num) return '0';
+                if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+                if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+                return num.toString();
+            };
+
+            const formatFileSize = (bytes) => {
+                if (bytes === 0) return '0 B';
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+            };
+
+            const renderMedia = (tweet) => {
+                if (!tweet.attachments?.media_keys) return null;
+
+                return (
+                    <div className="mt-3 space-y-2">
+                        {tweet.attachments.media_keys.map(key => {
+                            const mediaItem = media[key];
+                            if (!mediaItem) return null;
+
+                            if (mediaItem.type === 'photo') {
+                                return (
+                                    <div key={key} className="rounded-2xl overflow-hidden border border-gray-200 media-container">
+                                        <img 
+                                            src={mediaItem.url} 
+                                            alt={mediaItem.alt_text || 'Image'}
+                                            className="w-full h-auto object-cover"
+                                        />
+                                    </div>
+                                );
+                            }
+
+                            if (mediaItem.type === 'video') {
+                                return (
+                                    <div key={key} className="rounded-2xl overflow-hidden border border-gray-200 relative media-container">
+                                        {mediaItem.preview_image_url && (
+                                            <div className="relative">
+                                                <img 
+                                                    src={mediaItem.preview_image_url} 
+                                                    alt="Video thumbnail"
+                                                    className="w-full h-auto object-cover"
+                                                />
+                                                <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30">
+                                                    <div className="bg-blue-500 rounded-full p-3">
+                                                        <Icon name="play" className="w-6 h-6 text-white fill-current" />
+                                                    </div>
+                                                </div>
+                                                {mediaItem.public_metrics?.view_count && (
+                                                    <div className="absolute bottom-2 left-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
+                                                        {formatNumber(mediaItem.public_metrics.view_count)} views
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            }
+
+                            return null;
+                        })}
+                    </div>
+                );
+            };
+
+            const renderTweet = (tweet) => {
+                const author = users[tweet.author_id];
+                if (!author) return null;
+
+                return (
+                    <div key={tweet.id} className="bookmark-card border-b border-gray-200 p-4">
+                        <div className="flex space-x-3">
+                            <img 
+                                src={author.profile_image_url || 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIGZpbGw9IiNjY2MiIHZpZXdCb3g9IjAgMCAyNCAyNCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTIgMTJjMi4yMSAwIDQtMS43OSA0LTRzLTEuNzktNC00LTQtNCAxLjc5LTQgNCAx Ljc5IDQgNCA0em0wIDJjLTIuNjcgMC04IDEuMzQtOCA0djJoMTZ2LTJjMC0yLjY2LTUuMzMtNC04LTR6Ii8+PC9zdmc+'} 
+                                alt={author.name}
+                                className="w-10 h-10 rounded-full flex-shrink-0"
+                            />
+                            
+                            <div className="flex-1 min-w-0">
+                                {/* Header */}
+                                <div className="flex items-center space-x-1 text-sm">
+                                    <span className="font-bold text-gray-900 truncate">{author.name}</span>
+                                    {author.verified && (
+                                        <div className="w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center">
+                                            <span className="text-white text-xs">✓</span>
+                                        </div>
+                                    )}
+                                    <span className="text-gray-500 truncate">@{author.username}</span>
+                                    <span className="text-gray-500">·</span>
+                                    <span className="text-gray-500">{formatDate(tweet.created_at)}</span>
+                                </div>
+
+                                {/* Tweet Text */}
+                                <div className="mt-1">
+                                    <p className="text-gray-900 whitespace-pre-wrap break-words">
+                                        {tweet.text}
+                                    </p>
+                                </div>
+
+                                {/* Media */}
+                                {renderMedia(tweet)}
+
+                                {/* Metrics */}
+                                <div className="flex items-center justify-between mt-3 max-w-md text-gray-500">
+                                    <div className="flex items-center space-x-2 hover:text-blue-500 cursor-pointer">
+                                        <Icon name="message-circle" />
+                                        <span className="text-sm">{formatNumber(tweet.public_metrics?.reply_count)}</span>
+                                    </div>
+                                    
+                                    <div className="flex items-center space-x-2 hover:text-green-500 cursor-pointer">
+                                        <Icon name="repeat-2" />
+                                        <span className="text-sm">{formatNumber(tweet.public_metrics?.retweet_count)}</span>
+                                    </div>
+                                    
+                                    <div className="flex items-center space-x-2 hover:text-red-500 cursor-pointer">
+                                        <Icon name="heart" />
+                                        <span className="text-sm">{formatNumber(tweet.public_metrics?.like_count)}</span>
+                                    </div>
+                                    
+                                    <div className="flex items-center space-x-2 hover:text-blue-500 cursor-pointer">
+                                        <Icon name="bookmark" className="w-5 h-5 fill-current text-blue-500" />
+                                        <span className="text-sm">{formatNumber(tweet.public_metrics?.bookmark_count)}</span>
+                                    </div>
+                                    
+                                    <div className="flex items-center space-x-2 hover:text-blue-500 cursor-pointer">
+                                        <Icon name="share" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            if (loading) {
+                return (
+                    <div className="min-h-screen bg-white flex items-center justify-center">
+                        <div className="text-center">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                            <p className="text-gray-600">Loading bookmarks...</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (error) {
+                return (
+                    <div className="min-h-screen bg-white flex items-center justify-center">
+                        <div className="text-center max-w-md p-8">
+                            <Icon name="alert-circle" className="w-12 h-12 text-red-500 mx-auto mb-4" />
+                            <h2 className="text-xl font-semibold text-gray-900 mb-2">Error Loading Bookmarks</h2>
+                            <p className="text-gray-600 mb-6">{error}</p>
+                            <div className="space-y-3">
+                                <button
+                                    onClick={() => loadBookmarks()}
+                                    className="bg-blue-500 text-white px-6 py-3 rounded-full hover:bg-blue-600 transition-colors block w-full"
+                                >
+                                    Try Again
+                                </button>
+                                {config.dataDirectory && (
+                                    <p className="text-xs text-gray-500">
+                                        Data directory: {config.dataDirectory}
+                                    </p>
+                                )}
+                            </div>
+                            {availableFiles.length > 0 && (
+                                <div className="mt-6">
+                                    <p className="text-sm text-gray-500 mb-2">Available files:</p>
+                                    <div className="space-y-1">
+                                        {availableFiles.map(file => (
+                                            <button
+                                                key={file.name}
+                                                onClick={() => loadBookmarks(file.name)}
+                                                className="block w-full text-sm text-blue-600 hover:text-blue-800 truncate p-2 hover:bg-gray-50 rounded"
+                                                title={`${file.name} (${formatFileSize(file.size)})`}
+                                            >
+                                                {file.name}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-white">
+                    {/* Header */}
+                    <div className="sticky top-0 bg-white bg-opacity-90 backdrop-blur-md border-b border-gray-200 z-10">
+                        <div className="max-w-2xl mx-auto px-4 py-3">
+                            <div className="flex items-center justify-between">
+                                <h1 className="text-xl font-bold text-gray-900">
+                                    {config.ui.title || 'Bookmarks'}
+                                </h1>
+                                <div className="flex items-center space-x-2">
+                                    {config.ui.enableFileSelector && availableFiles.length > 1 && (
+                                        <select
+                                            value={currentFile}
+                                            onChange={(e) => loadBookmarks(e.target.value)}
+                                            className="text-sm border border-gray-300 rounded px-2 py-1 max-w-xs truncate"
+                                            title={currentFile}
+                                        >
+                                            {availableFiles.map(file => (
+                                                <option key={file.name} value={file.name}>
+                                                    {file.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    )}
+                                    <button
+                                        onClick={() => {
+                                            loadAvailableFiles();
+                                            loadBookmarks(currentFile);
+                                        }}
+                                        className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                                        title="Refresh"
+                                    >
+                                        <Icon name="refresh-cw" className="w-5 h-5 text-gray-600" />
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* Search Bar */}
+                            {config.ui.enableSearch && (
+                                <div className="mt-3 relative">
+                                    <input
+                                        type="text"
+                                        placeholder="Search bookmarks..."
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                        className="w-full px-4 py-2 bg-gray-100 rounded-full border-none outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 transition-all"
+                                    />
+                                    <Icon name="search" className="absolute right-4 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                                </div>
+                            )}
+                            
+                            {/* Stats */}
+                            <div className="mt-2 text-sm text-gray-500">
+                                {config.ui.enableSearch ? (
+                                    <>
+                                        {stats.filtered} of {stats.total} bookmarks
+                                        {searchTerm && ` matching "${searchTerm}"`}
+                                    </>
+                                ) : (
+                                    `${stats.total} bookmarks`
+                                )}
+                                {currentFile && (
+                                    <span className="ml-2 text-xs bg-gray-100 px-2 py-1 rounded">
+                                        {currentFile}
+                                    </span>
+                                )}
+                                {config.dataDirectory && (
+                                    <span className="ml-2 text-xs text-gray-400">
+                                        {config.dataDirectory}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="max-w-2xl mx-auto">
+                        {/* Bookmarks List */}
+                        {filteredBookmarks.length > 0 ? (
+                            <div>
+                                {filteredBookmarks.map(renderTweet)}
+                                <div className="p-4 text-center text-gray-500 text-sm border-t border-gray-200">
+                                    End of bookmarks
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-8 text-center">
+                                {config.ui.enableSearch && searchTerm ? (
+                                    <>
+                                        <Icon name="search" className="w-8 h-8 text-gray-400 mx-auto mb-4" />
+                                        <p className="text-gray-600">No bookmarks found matching your search</p>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Icon name="bookmark" className="w-8 h-8 text-gray-400 mx-auto mb-4" />
+                                        <p className="text-gray-600">No bookmarks available</p>
+                                        {config.dataDirectory && (
+                                            <p className="text-sm text-gray-400 mt-2">
+                                                Place bookmark files in: {config.dataDirectory}
+                                            </p>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<TwitterBookmarksViewer />, document.getElementById('root'));
+    </script>
+</body>
+</html>

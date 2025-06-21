@@ -1,0 +1,7 @@
+{
+  "client_id": "",
+  "client_secret": "",
+  "redirect_uri": "http://localhost:3001/callback",
+  "batch_size": 100,
+  "state_file": "bookmark_download_state.json"
+}
